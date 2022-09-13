@@ -96,6 +96,7 @@ int main(int argc, char **argv) {
   wbTime_stop(GPU, "Copying input memory to the GPU.");
 
   //@@ Initialize the grid and block dimensions here
+  // Make sure BLOCK_WIDTH equal to TILE_WIDTH
   int BLOCK_WIDTH = 16;
   dim3 dimGrid(ceil((1.0 * numCColumns)/BLOCK_WIDTH), ceil((1.0 * numCRows)/BLOCK_WIDTH), 1);
   dim3 dimBlock(BLOCK_WIDTH, BLOCK_WIDTH, 1);
