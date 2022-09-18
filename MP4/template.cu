@@ -19,7 +19,7 @@ __constant__ float Mc[MASK_WIDTH][MASK_WIDTH][MASK_WIDTH];
 __global__ void conv3d(float *input, float *output, const int z_size,
                        const int y_size, const int x_size) {
   //@@ Insert kernel code here
-  const int TILE_WIDTH = 16;
+  const int TILE_WIDTH = 4;
   int tx = threadIdx.x; int ty = threadIdx.y; int tz = threadIdx.z;
   int xo = blockIdx.x * TILE_WIDTH + tx;
   int yo = blockIdx.y * TILE_WIDTH + ty;
@@ -100,10 +100,11 @@ int main(int argc, char *argv[]) {
   wbTime_start(Compute, "Doing the computation on the GPU");
   //@@ Initialize grid and block dimensions here
   // kernelLength => MASK_WIDTH ^ 3
-  int BLOCK_WIDTH = 16;
+  // Note: cannot be too large => A SM (streaming multiprocessors) can take up to 2048 threads.
+  //       If BLOCK_WIDTH = 16, 16^3 = 4096 threads => cannot schedule to any SM.
+  int BLOCK_WIDTH = 4; 
   dim3 dimGrid(ceil((1.0 * x_size)/BLOCK_WIDTH), ceil((1.0 * y_size)/BLOCK_WIDTH), ceil((1.0 * z_size)/BLOCK_WIDTH));
   dim3 dimBlock(BLOCK_WIDTH + MASK_WIDTH - 1, BLOCK_WIDTH + MASK_WIDTH - 1, BLOCK_WIDTH + MASK_WIDTH - 1);
-
   //@@ Launch the GPU kernel here
   conv3d<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, z_size, y_size, x_size);
   cudaDeviceSynchronize();
@@ -123,17 +124,6 @@ int main(int argc, char *argv[]) {
   hostOutput[1] = y_size;
   hostOutput[2] = x_size;
 
-  // for (int i=0; i < MASK_WIDTH; i++) {
-  //   for (int j=0; j < MASK_WIDTH; j++) {
-  //     for (int k=0; k < MASK_WIDTH; k++) {
-  //       wbLog(TRACE, "Mc[", i, "][", j, "][", k, "] = ", Mc[i * MASK_WIDTH * MASK_WIDTH + j * MASK_WIDTH + k]);
-  //       wbLog(TRACE, "hostKernel[", i, "][", j, "][", k, "] = ", hostKernel[i * MASK_WIDTH * MASK_WIDTH + j * MASK_WIDTH + k]);  
-  //     }
-  //   }
-  // }
-  for (int i=0; i < inputLength; i++) {
-    wbLog(TRACE, "hostOutput[", i, "] = ", hostOutput[i]);
-  }
   wbSolution(args, hostOutput, inputLength);
 
   // Free device memory
