@@ -100,11 +100,6 @@ int main(int argc, char **argv) {
   float         *deviceCDF;        // CDF
   float         *deviceOutput;     // Output
 
-  // unsigned char *hostUCharImageData = (unsigned char *)malloc(imageWidth * imageHeight * imageChannels * sizeof(unsigned char));
-  // unsigned char *hostGrayImageData  = (unsigned char *)malloc(imageWidth * imageHeight * sizeof(unsigned char));
-  // unsigned int  *hostHistogram      = (unsigned int *)malloc(HISTOGRAM_LENGTH * sizeof(unsigned int)); 
-  // float         *hostCDF            = (float *)malloc(HISTOGRAM_LENGTH * sizeof(float)); 
-
   args = wbArg_read(argc, argv); /* parse the input arguments */
 
   inputImageFile = wbArg_getInputFile(args, 0);
@@ -154,30 +149,6 @@ int main(int argc, char **argv) {
   cudaDeviceSynchronize();
 
   cudaMemcpy(hostOutputImageData, deviceOutput, imageWidth * imageHeight * imageChannels * sizeof(float), cudaMemcpyDeviceToHost);
-
-  // cudaMemcpy(hostUCharImageData, deviceUCharImage, imageWidth * imageHeight * imageChannels * sizeof(unsigned char), cudaMemcpyDeviceToHost);
-  
-  // for (int i=0; i < 10; i++) {
-  //   printf("%f\n", hostInputImageData[i]);
-  // } 
-  
-  // for (int i=0; i < 3; i++) {
-  //   printf("%u\n", hostUCharImageData[i]);
-  // } 
-
-  // cudaMemcpy(hostHistogram, deviceHistogram, HISTOGRAM_LENGTH * sizeof(unsigned int), cudaMemcpyDeviceToHost);
-  // unsigned int sum = 0;
-  // for (int i=0; i < HISTOGRAM_LENGTH; i++) {
-  //   sum += hostHistogram[i]; 
-  // }
-  // printf("%u", sum); // 65536
-
-  // cudaMemcpy(hostCDF, deviceCDF, HISTOGRAM_LENGTH * sizeof(float), cudaMemcpyDeviceToHost);
-  // unsigned int sum = 0;
-  // for (int i=0; i < HISTOGRAM_LENGTH; i++) {
-  //   printf("hostCDF[%d] = %f\n", i, hostCDF[i]);
-  // }
-  
 
   wbSolution(args, outputImage);
 
