@@ -2,7 +2,8 @@
 #include <iostream>
 #include "gpu-new-forward.h"
 
-#define TILE_WIDTH 16
+#define TILE_WIDTH 10
+#define MASK_WIDTH 7
 
 __constant__ float mask_constant[3136];
 
@@ -40,21 +41,36 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #define mask_4d(i3, i2, i1, i0) mask_constant[(i3) * (Channel * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
     // Insert your GPU convolution kernel code here
+    int tx = threadIdx.x; int ty = threadIdx.y;
+
     int W_size = ceil((1.0 * Width_out)/TILE_WIDTH);
     int m = blockIdx.x;
-    int h = (blockIdx.y / W_size) * TILE_WIDTH + threadIdx.y;
-    int w = (blockIdx.y % W_size) * TILE_WIDTH + threadIdx.x;
+    int h = (blockIdx.y / W_size) * TILE_WIDTH + ty;
+    int w = (blockIdx.y % W_size) * TILE_WIDTH + tx;
     int b = blockIdx.z;
 
+    __shared__ float input_tile[TILE_WIDTH + MASK_WIDTH - 1][TILE_WIDTH + MASK_WIDTH - 1];
+
     float acc = 0.0f;
-    if (h < Height_out && w < Width_out) {
-        for (int c=0; c < Channel; c++) {
+    for (int c=0; c < Channel; c++) {
+        if ((w >= 0) && (w < Width) && (h >= 0) && (h < Height)) {
+            input_tile[ty][tx] = in_4d(b, c, h, w);
+        } else {
+            input_tile[ty][tx] = 0.0f;
+        }
+        __syncthreads();
+
+        if ((ty < TILE_WIDTH) && (tx < TILE_WIDTH)) {
             for (int p=0; p < K; p++) {
                 for (int q=0; q < K; q++)
-                    acc += in_4d(b, c, h+p, w+q) * mask_4d(m, c, p, q);
+                    acc += input_tile[ty+p][tx+q] * mask_4d(m, c, p, q); 
             }
         }
-        out_4d(b, m, h, w) = acc;
+        __syncthreads();
+    }
+
+    if ((ty < TILE_WIDTH) && (tx < TILE_WIDTH) && (h < Height_out) && (w < Width_out)) {
+      out_4d(b, m, h, w) = acc;
     }
 
     #undef out_4d
@@ -101,7 +117,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int Y = H_size * W_size;
 
     dim3 dimGrid(Map_out, Y, Batch);
-    dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+    dim3 dimBlock(TILE_WIDTH + K - 1, TILE_WIDTH + K - 1, 1);
     conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, Batch, Map_out, Channel, Height, Width, K);
 }
 
