@@ -2,12 +2,13 @@
 #include <iostream>
 #include "gpu-new-forward.h"
 
-#define TILE_WIDTH 10
+#define TILE_WIDTH 16
+#define BLOCK_SIZE 256
 #define MASK_WIDTH 7
 
 __constant__ float mask_constant[3136];
 
-__global__ void conv_forward_kernel(float *output, const float *input, const float *mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
+__global__ void conv_forward_kernel_tile(float *output, const float *input, const float *mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
     /*
     Modify this function to implement the forward pass described in Chapter 16.
@@ -78,7 +79,125 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #undef mask_4d
 }
 
-	
+__global__ void conv_forward_kernel(float *output, const float *input, const float *mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
+{
+    /*
+    Modify this function to implement the forward pass described in Chapter 16.
+    We have added an additional dimension to the tensors to support an entire mini-batch
+    The goal here is to be correct AND fast.
+    Function paramter definitions:
+    output - output
+    input - input
+    mask - convolution kernel
+    Batch - batch_size (number of images in x)
+    Map_out - number of output feature maps
+    Channel - number of input feature maps
+    Height - input height dimension
+    Width - input width dimension
+    K - kernel height and width (K x K)
+    */
+
+    const int Height_out = Height - K + 1;
+    const int Width_out = Width - K + 1;
+    // (void)Height_out; // silence declared but never referenced warning. remove this line when you start working
+    // (void)Width_out; // silence declared but never referenced warning. remove this line when you start working
+
+    // We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
+    // An example use of these macros:
+    // float a = in_4d(0,0,0,0)
+    // out_4d(0,0,0,0) = a
+
+    #define out_4d(i3, i2, i1, i0) output[(i3) * (Map_out * Height_out * Width_out) + (i2) * (Height_out * Width_out) + (i1) * (Width_out) + i0]
+    #define in_4d(i3, i2, i1, i0) input[(i3) * (Channel * Height * Width) + (i2) * (Height * Width) + (i1) * (Width) + i0]
+    #define mask_4d(i3, i2, i1, i0) mask_constant[(i3) * (Channel * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+
+    // Insert your GPU convolution kernel code here
+    int W_size = ceil((1.0 * Width_out)/TILE_WIDTH);
+    int m = blockIdx.x;
+    int h = (blockIdx.y / W_size) * TILE_WIDTH + threadIdx.y;
+    int w = (blockIdx.y % W_size) * TILE_WIDTH + threadIdx.x;
+    int b = blockIdx.z;
+
+    float acc = 0.0f;
+    if (h < Height_out && w < Width_out) {
+        for (int c=0; c < Channel; c++) {
+            for (int p=0; p < K; p++) {
+                for (int q=0; q < K; q++)
+                    acc += in_4d(b, c, h+p, w+q) * mask_4d(m, c, p, q);
+            }
+        }
+        out_4d(b, m, h, w) = acc;
+    }
+
+    #undef out_4d
+    #undef in_4d
+    #undef mask_4d
+}
+
+__global__ void matrixMultiply(const float *B, float *C, int numARows,
+                               int numAColumns, int numBRows,
+                               int numBColumns, int numCRows,
+                               int numCColumns) {
+  //@@ Insert code to implement matrix multiplication here
+  __shared__ float subTileA[TILE_WIDTH][TILE_WIDTH];
+  __shared__ float subTileB[TILE_WIDTH][TILE_WIDTH]; 
+  
+  int bx = blockIdx.x;  int by = blockIdx.y;
+  int tx = threadIdx.x; int ty = threadIdx.y;
+
+  int row = by * TILE_WIDTH + ty;
+  int col = bx * TILE_WIDTH + tx;
+  float Pvalue = 0;
+
+  int WIDTH = max(max(numARows, numAColumns), numBColumns);
+  for (int q=0; q < (ceil((float) WIDTH/ TILE_WIDTH)); ++q) {
+    if (row < numARows && (q*TILE_WIDTH + tx) < numAColumns)
+      subTileA[ty][tx] = mask_constant[row * numAColumns + q * TILE_WIDTH + tx];
+    else
+      subTileA[ty][tx] = 0;
+
+    if (col < numBColumns && (q*TILE_WIDTH + ty) < numBRows)
+      subTileB[ty][tx] = B[(q * TILE_WIDTH + ty) * numBColumns + col];
+    else
+      subTileB[ty][tx] = 0;
+    __syncthreads();
+
+    for (int k=0; k < TILE_WIDTH; ++k)
+      Pvalue += subTileA[ty][k] * subTileB[k][tx];
+    __syncthreads();
+  }
+  if (row < numCRows && col < numCColumns)
+    C[row * numCColumns + col] = Pvalue;
+}
+
+
+void unroll_seq(int B, int C, int H, int W, int K, const float* X, float* X_unroll)
+{
+    int H_out = H - K + 1;
+    int W_out = W - K + 1;
+    int W_unroll = H_out * W_out;
+    int H_unroll = C * K * K;
+
+    #define in_4d(i3, i2, i1, i0) X[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+    for (int b=0; b < B; ++b) {
+        for (int c=0; c < C; ++c) {
+            int w_base = c * (K*K);
+            for (int p=0; p < K; ++p) {
+                for (int q=0; q < K; ++q) {
+                    for (int h=0; h < H_out; ++h) {
+                        for (int w=0; w < W_out; ++w) {
+                            int h_unroll = w_base + p * K + q;
+                            int w_unroll = h * W_out + w;
+                            X_unroll[b * W_unroll * H_unroll + h_unroll * W_unroll + w_unroll] = in_4d(b, c, h+p, w+q);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #undef in_4d
+}
+
 __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, const float *host_input, const float *host_mask, float **device_output_ptr, float **device_input_ptr, float **device_mask_ptr, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
     // Allocate memory and copy over the relevant data structures to the GPU
@@ -94,6 +213,52 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     //     exit(-1);
     // }
 
+    #define in_4d(i3, i2, i1, i0) host_input[(i3) * (Channel * Height * Width) + (i2) * (Height * Width) + (i1) * (Width) + i0]
+    // for (int h=0; h < Height; h++) {
+    //     for (int w=0; w < Width; w++) {
+    //         float val = in_4d(0, 0, h, w);
+    //         if (val != 0.0) {
+    //             printf("host_input[batch = %d][channel = %d][height = %d][width = %d] = %f\n", 0, 0, h, w, in_4d(0, 0, h, w));
+    //             break;
+    //         } 
+    //     }
+    // }
+    // for (int h=28; h < 28+K; h++) {
+    //     for (int w=48; w < 48+K; w++) {
+    //         float val = in_4d(0, 0, h, w);
+    //         printf("host_input[batch = %d][channel = %d][height = %d][width = %d] = %f\n", 0, 0, h, w, in_4d(0, 0, h, w));
+    //     }
+    // }
+    #undef in_4d
+
+    int W_out = Width - K + 1;
+    int H_out = Height - K + 1;
+    int W_unroll = H_out * W_out;
+    int H_unroll = Channel * K * K;
+    // float *X_unroll_local = (float*)malloc(W_unroll * H_unroll * sizeof(float));
+    // unroll_seq(Batch, Channel, Height, Width, K, host_input, X_unroll_local);
+    // for (int h=0; h < H_unroll; h ++) {
+    //     int w = 2288;
+    //     printf("X_unroll_local[h = %d][w = %d] = %f\n", h, w, X_unroll_local[h * W_unroll + w]);
+    //     // for (int w=0; w < W_unroll; w++) {
+    //     //     if (X_unroll_local[h * W_unroll + w] != 0.0) {
+    //     //         printf("X_unroll_local[h = %d][w = %d] = %f\n", h, w, X_unroll_local[h * W_unroll + w]);
+    //     //         break;
+    //     //     }
+    //     // }
+    // }
+
+    // for (int h=0; h < H_unroll; h++) {
+    //     for (int w=0; w < W_unroll; w++) {
+    //         // float val = in_4d(0, 0, h, w);
+    //         // int w = 16;
+    //         if (X_unroll_local[h * W_unroll + w] != 0.0) {
+    //             printf("X_unroll_local[height = %d][width = %d][%d] = %f\n", h, w, h * W_unroll + w, X_unroll_local[h * W_unroll + w]);
+    //             break;
+    //         }
+    //     }
+    // }  
+
     int output_size = Batch * Map_out * (Height - K + 1) * (Width - K + 1);
     int input_size = Batch * Channel * Height * Width;
     int mask_size = Map_out * Channel * K * K;
@@ -105,22 +270,79 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMemcpyToSymbol(mask_constant, host_mask, mask_size * sizeof(float));
 }
 
+__global__ void unroll_kernel(int Channel, int Height, int Width, int K, const float *device_input, float *X_unroll)
+{
+    int c, s, h_out, w_out, h_unroll, w_unroll, h_base, p, q;
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    int H_out = Height - K + 1;
+    int W_out = Width - K + 1;
+    int W_unroll = H_out * W_out;
+
+    #define in_3d(i2, i1, i0) device_input[(i2) * (Height * Width) + (i1) * (Width) + i0]
+    if (t < Channel * W_unroll) {
+        c = t / W_unroll;
+        s = t % W_unroll;
+        h_out = s / W_out;
+        w_out = s % W_out;
+        w_unroll = h_out * W_out + w_out;
+        h_base = c * K * K;
+        for (p = 0; p < K; p++) {
+            for (q = 0; q < K; q++) {
+                h_unroll = h_base + p * K + q;
+                X_unroll[h_unroll * W_unroll + w_unroll] = in_3d(c, h_out + p, w_out + q); 
+            }
+        }
+    }
+    #undef in_3d
+}
 
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
     // Set the kernel dimensions and call the kernel
+    printf("Batch: %d, Map_out: %d, Channel: %d, Height: %d, Width: %d, K: %d\n", Batch, Map_out, Channel, Height, Width, K);
     int W_out = Width - K + 1;
     int H_out = Height - K + 1;
 
-    int W_size = ceil((1.0 * W_out)/TILE_WIDTH);
-    int H_size = ceil((1.0 * H_out)/TILE_WIDTH);
-    int Y = H_size * W_size;
+    int W_unroll = H_out * W_out;
+    int H_unroll = Channel * K * K;
+    float *X_unroll;
+    cudaMalloc((void **) &X_unroll, W_unroll * H_unroll * sizeof(float));
 
-    dim3 dimGrid(Map_out, Y, Batch);
-    dim3 dimBlock(TILE_WIDTH + K - 1, TILE_WIDTH + K - 1, 1);
-    conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, Batch, Map_out, Channel, Height, Width, K);
+    // conv filter: m * (ck^2); X_unroll: (ck^2) * (H_out * W_out) => output feature: m * (H_out * W_out)
+    dim3 dimGrid(ceil((1.0 * H_out * W_out)/TILE_WIDTH), ceil((1.0 * Map_out)/TILE_WIDTH), 1);
+    dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+    //@@ Launch the GPU Kernel here
+    int numARows = Map_out;
+    int numAColumns = Channel * K * K;
+    int numBRows = numAColumns;
+    int numBColumns = H_out * W_out;
+    int numCRows = numARows;
+    int numCColumns = numBColumns; 
+
+    for (int b = 0; b < Batch; b++) {
+        int num_blocks = ceil((1.0 * Channel * H_out * W_out) / BLOCK_SIZE);
+        unroll_kernel<<<num_blocks, BLOCK_SIZE>>>(Channel, Height, Width, K, device_input + b * Channel * Height * Width, X_unroll);
+        matrixMultiply<<<dimGrid, dimBlock>>>(X_unroll, device_output + b * numCRows * numCColumns,
+            numARows, numAColumns, numBRows, numBColumns, numCRows, numCColumns);
+    }
+    cudaDeviceSynchronize();
+    cudaFree(X_unroll);
+    
+    // float *host_unroll = (float *)malloc(W_unroll * H_unroll * sizeof(float));;
+    // cudaMemcpy(host_unroll, X_unroll, W_unroll * H_unroll * sizeof(float), cudaMemcpyDeviceToHost);
+    // for (int h=0; h < H_unroll; h ++) {
+    //     int w = 2288;
+    //     printf("host_unroll[h = %d][w = %d] = %f\n", h, w, host_unroll[h * W_unroll + w]);
+    // }
+
+    // int W_size = ceil((1.0 * W_out)/TILE_WIDTH);
+    // int H_size = ceil((1.0 * H_out)/TILE_WIDTH);
+    // int Y = H_size * W_size;
+
+    // dim3 dimGrid(Map_out, Y, Batch);
+    // dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+    // conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, Batch, Map_out, Channel, Height, Width, K);
 }
-
 
 __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *device_output, float *device_input, float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
