@@ -213,52 +213,6 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     //     exit(-1);
     // }
 
-    #define in_4d(i3, i2, i1, i0) host_input[(i3) * (Channel * Height * Width) + (i2) * (Height * Width) + (i1) * (Width) + i0]
-    // for (int h=0; h < Height; h++) {
-    //     for (int w=0; w < Width; w++) {
-    //         float val = in_4d(0, 0, h, w);
-    //         if (val != 0.0) {
-    //             printf("host_input[batch = %d][channel = %d][height = %d][width = %d] = %f\n", 0, 0, h, w, in_4d(0, 0, h, w));
-    //             break;
-    //         } 
-    //     }
-    // }
-    // for (int h=28; h < 28+K; h++) {
-    //     for (int w=48; w < 48+K; w++) {
-    //         float val = in_4d(0, 0, h, w);
-    //         printf("host_input[batch = %d][channel = %d][height = %d][width = %d] = %f\n", 0, 0, h, w, in_4d(0, 0, h, w));
-    //     }
-    // }
-    #undef in_4d
-
-    int W_out = Width - K + 1;
-    int H_out = Height - K + 1;
-    int W_unroll = H_out * W_out;
-    int H_unroll = Channel * K * K;
-    // float *X_unroll_local = (float*)malloc(W_unroll * H_unroll * sizeof(float));
-    // unroll_seq(Batch, Channel, Height, Width, K, host_input, X_unroll_local);
-    // for (int h=0; h < H_unroll; h ++) {
-    //     int w = 2288;
-    //     printf("X_unroll_local[h = %d][w = %d] = %f\n", h, w, X_unroll_local[h * W_unroll + w]);
-    //     // for (int w=0; w < W_unroll; w++) {
-    //     //     if (X_unroll_local[h * W_unroll + w] != 0.0) {
-    //     //         printf("X_unroll_local[h = %d][w = %d] = %f\n", h, w, X_unroll_local[h * W_unroll + w]);
-    //     //         break;
-    //     //     }
-    //     // }
-    // }
-
-    // for (int h=0; h < H_unroll; h++) {
-    //     for (int w=0; w < W_unroll; w++) {
-    //         // float val = in_4d(0, 0, h, w);
-    //         // int w = 16;
-    //         if (X_unroll_local[h * W_unroll + w] != 0.0) {
-    //             printf("X_unroll_local[height = %d][width = %d][%d] = %f\n", h, w, h * W_unroll + w, X_unroll_local[h * W_unroll + w]);
-    //             break;
-    //         }
-    //     }
-    // }  
-
     int output_size = Batch * Map_out * (Height - K + 1) * (Width - K + 1);
     int input_size = Batch * Channel * Height * Width;
     int mask_size = Map_out * Channel * K * K;
@@ -299,7 +253,7 @@ __global__ void unroll_kernel(int Channel, int Height, int Width, int K, const f
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
     // Set the kernel dimensions and call the kernel
-    printf("Batch: %d, Map_out: %d, Channel: %d, Height: %d, Width: %d, K: %d\n", Batch, Map_out, Channel, Height, Width, K);
+    // printf("Batch: %d, Map_out: %d, Channel: %d, Height: %d, Width: %d, K: %d\n", Batch, Map_out, Channel, Height, Width, K);
     int W_out = Width - K + 1;
     int H_out = Height - K + 1;
 
@@ -327,21 +281,6 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     }
     cudaDeviceSynchronize();
     cudaFree(X_unroll);
-    
-    // float *host_unroll = (float *)malloc(W_unroll * H_unroll * sizeof(float));;
-    // cudaMemcpy(host_unroll, X_unroll, W_unroll * H_unroll * sizeof(float), cudaMemcpyDeviceToHost);
-    // for (int h=0; h < H_unroll; h ++) {
-    //     int w = 2288;
-    //     printf("host_unroll[h = %d][w = %d] = %f\n", h, w, host_unroll[h * W_unroll + w]);
-    // }
-
-    // int W_size = ceil((1.0 * W_out)/TILE_WIDTH);
-    // int H_size = ceil((1.0 * H_out)/TILE_WIDTH);
-    // int Y = H_size * W_size;
-
-    // dim3 dimGrid(Map_out, Y, Batch);
-    // dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
-    // conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, Batch, Map_out, Channel, Height, Width, K);
 }
 
 __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *device_output, float *device_input, float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
