@@ -134,14 +134,15 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #undef mask_4d
 }
 
-__global__ void matrixMultiply(const float *B, float *C, int numARows,
+__global__ void matrixMultiply(const float *A, const float *B, float *C, int numARows,
                                int numAColumns, int numBRows,
                                int numBColumns, int numCRows,
-                               int numCColumns) {
+                               int numCColumns, int Channel, int Height, int Width, int K) {
   //@@ Insert code to implement matrix multiplication here
   __shared__ float subTileA[TILE_WIDTH][TILE_WIDTH];
   __shared__ float subTileB[TILE_WIDTH][TILE_WIDTH]; 
-  
+
+  int batch = blockIdx.z;
   int bx = blockIdx.x;  int by = blockIdx.y;
   int tx = threadIdx.x; int ty = threadIdx.y;
 
@@ -149,15 +150,21 @@ __global__ void matrixMultiply(const float *B, float *C, int numARows,
   int col = bx * TILE_WIDTH + tx;
   float Pvalue = 0;
 
-  int WIDTH = max(max(numARows, numAColumns), numBColumns);
-  for (int q=0; q < (ceil((float) WIDTH/ TILE_WIDTH)); ++q) {
+  #define in_4d(i3, i2, i1, i0) B[(i3) * (Channel * Height * Width) + (i2) * (Height * Width) + (i1) * (Width) + i0]
+  for (int q=0; q < (ceil((float) numAColumns/ TILE_WIDTH)); ++q) {
     if (row < numARows && (q*TILE_WIDTH + tx) < numAColumns)
-      subTileA[ty][tx] = mask_constant[row * numAColumns + q * TILE_WIDTH + tx];
+      subTileA[ty][tx] = A[row * numAColumns + q * TILE_WIDTH + tx];
     else
       subTileA[ty][tx] = 0;
 
+    int input_channel = (q*TILE_WIDTH + ty) / (K * K);
+    int input_height = col / (Width - K + 1);
+    int input_width  = col % (Width - K + 1);
+    int input_dh = ((q*TILE_WIDTH + ty) % (K * K)) / K;
+    int input_dw = ((q*TILE_WIDTH + ty) % (K * K)) % K;
+
     if (col < numBColumns && (q*TILE_WIDTH + ty) < numBRows)
-      subTileB[ty][tx] = B[(q * TILE_WIDTH + ty) * numBColumns + col];
+      subTileB[ty][tx] = in_4d(batch, input_channel, input_height + input_dh, input_width + input_dw);
     else
       subTileB[ty][tx] = 0;
     __syncthreads();
@@ -166,8 +173,9 @@ __global__ void matrixMultiply(const float *B, float *C, int numARows,
       Pvalue += subTileA[ty][k] * subTileB[k][tx];
     __syncthreads();
   }
+  #undef in_4d
   if (row < numCRows && col < numCColumns)
-    C[row * numCColumns + col] = Pvalue;
+    C[batch * numCRows * numCColumns + row * numCColumns + col] = Pvalue;
 }
 
 
@@ -219,9 +227,10 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
 
     cudaMalloc((void **) device_output_ptr, output_size * sizeof(float));
     cudaMalloc((void **) device_input_ptr, input_size * sizeof(float));
+    cudaMalloc((void **) device_mask_ptr, mask_size * sizeof(float));
 
     cudaMemcpy(*device_input_ptr, host_input, input_size * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(mask_constant, host_mask, mask_size * sizeof(float));
+    cudaMemcpy(*device_mask_ptr, host_mask, mask_size * sizeof(float), cudaMemcpyHostToDevice);
 }
 
 __global__ void unroll_kernel(int Channel, int Height, int Width, int K, const float *device_input, float *X_unroll)
@@ -257,13 +266,8 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int W_out = Width - K + 1;
     int H_out = Height - K + 1;
 
-    int W_unroll = H_out * W_out;
-    int H_unroll = Channel * K * K;
-    float *X_unroll;
-    cudaMalloc((void **) &X_unroll, W_unroll * H_unroll * sizeof(float));
-
     // conv filter: m * (ck^2); X_unroll: (ck^2) * (H_out * W_out) => output feature: m * (H_out * W_out)
-    dim3 dimGrid(ceil((1.0 * H_out * W_out)/TILE_WIDTH), ceil((1.0 * Map_out)/TILE_WIDTH), 1);
+    dim3 dimGrid(ceil((1.0 * H_out * W_out)/TILE_WIDTH), ceil((1.0 * Map_out)/TILE_WIDTH), Batch);
     dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
     //@@ Launch the GPU Kernel here
     int numARows = Map_out;
@@ -273,14 +277,8 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int numCRows = numARows;
     int numCColumns = numBColumns; 
 
-    for (int b = 0; b < Batch; b++) {
-        int num_blocks = ceil((1.0 * Channel * H_out * W_out) / BLOCK_SIZE);
-        unroll_kernel<<<num_blocks, BLOCK_SIZE>>>(Channel, Height, Width, K, device_input + b * Channel * Height * Width, X_unroll);
-        matrixMultiply<<<dimGrid, dimBlock>>>(X_unroll, device_output + b * numCRows * numCColumns,
-            numARows, numAColumns, numBRows, numBColumns, numCRows, numCColumns);
-    }
-    cudaDeviceSynchronize();
-    cudaFree(X_unroll);
+    matrixMultiply<<<dimGrid, dimBlock>>>(device_mask, device_input, device_output,
+        numARows, numAColumns, numBRows, numBColumns, numCRows, numCColumns, Channel, Height, Width, K);
 }
 
 __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *device_output, float *device_input, float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
