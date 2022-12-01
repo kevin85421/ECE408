@@ -1,5 +1,6 @@
 #include <cmath>
 #include <iostream>
+#include <cuda_fp16.h>
 #include "gpu-new-forward.h"
 
 #define TILE_WIDTH 16
@@ -139,8 +140,8 @@ __global__ void matrixMultiply(const float * __restrict__ A, const float * __res
                                int numBColumns, int numCRows,
                                int numCColumns, int Channel, int Height, int Width, int K) {
   //@@ Insert code to implement matrix multiplication here
-  __shared__ float subTileA[TILE_WIDTH][TILE_WIDTH];
-  __shared__ float subTileB[TILE_WIDTH][TILE_WIDTH]; 
+  __shared__ half subTileA[TILE_WIDTH][TILE_WIDTH];
+  __shared__ half subTileB[TILE_WIDTH][TILE_WIDTH]; 
 
   int batch = blockIdx.z;
   int bx = blockIdx.x;  int by = blockIdx.y;
@@ -153,7 +154,7 @@ __global__ void matrixMultiply(const float * __restrict__ A, const float * __res
   #define in_4d(i3, i2, i1, i0) B[(i3) * (Channel * Height * Width) + (i2) * (Height * Width) + (i1) * (Width) + i0]
   for (int q=0; q < (ceil((float) numAColumns/ TILE_WIDTH)); ++q) {
     if (row < numARows && (q*TILE_WIDTH + tx) < numAColumns)
-      subTileA[ty][tx] = A[row * numAColumns + q * TILE_WIDTH + tx];
+      subTileA[ty][tx] = __float2half(A[row * numAColumns + q * TILE_WIDTH + tx]);
     else
       subTileA[ty][tx] = 0;
 
@@ -164,18 +165,18 @@ __global__ void matrixMultiply(const float * __restrict__ A, const float * __res
     int input_dw = ((q*TILE_WIDTH + ty) % (K * K)) % K;
 
     if (col < numBColumns && (q*TILE_WIDTH + ty) < numBRows)
-      subTileB[ty][tx] = in_4d(batch, input_channel, input_height + input_dh, input_width + input_dw);
+      subTileB[ty][tx] = __float2half(in_4d(batch, input_channel, input_height + input_dh, input_width + input_dw));
     else
       subTileB[ty][tx] = 0;
     __syncthreads();
 
     for (int k=0; k < TILE_WIDTH; ++k)
-      Pvalue += subTileA[ty][k] * subTileB[k][tx];
+      Pvalue = __hfma(subTileA[ty][k], subTileB[k][tx], Pvalue);
     __syncthreads();
   }
   #undef in_4d
   if (row < numCRows && col < numCColumns)
-    C[batch * numCRows * numCColumns + row * numCColumns + col] = Pvalue;
+    C[batch * numCRows * numCColumns + row * numCColumns + col] = __half2float(Pvalue);
 }
 
 
