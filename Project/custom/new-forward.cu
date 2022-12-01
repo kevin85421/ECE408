@@ -134,7 +134,7 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #undef mask_4d
 }
 
-__global__ void matrixMultiply(const float *A, const float *B, float *C, int numARows,
+__global__ void matrixMultiply(const float * __restrict__ A, const float * __restrict__ B, float * __restrict__ C, int numARows,
                                int numAColumns, int numBRows,
                                int numBColumns, int numCRows,
                                int numCColumns, int Channel, int Height, int Width, int K) {
@@ -259,7 +259,7 @@ __global__ void unroll_kernel(int Channel, int Height, int Width, int K, const f
     #undef in_3d
 }
 
-__host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
+__host__ void GPUInterface::conv_forward_gpu(float * __restrict__ device_output, const float * __restrict__ device_input, const float * __restrict__ device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
     // Set the kernel dimensions and call the kernel
     // printf("Batch: %d, Map_out: %d, Channel: %d, Height: %d, Width: %d, K: %d\n", Batch, Map_out, Channel, Height, Width, K);
