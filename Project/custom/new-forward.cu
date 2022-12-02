@@ -1,6 +1,7 @@
 #include <cmath>
 #include <iostream>
 #include "gpu-new-forward.h"
+#include <cuda_fp16.h>
 
 #define TILE_WIDTH 16
 
@@ -44,15 +45,39 @@ __global__ void conv_forward_kernel(float * __restrict__ output, const float * _
     int w = (blockIdx.y % W_size) * TILE_WIDTH + threadIdx.x;
     int b = blockIdx.z;
 
-    float acc = 0.0f;
+    int mh1, mw1, mh2, mw2;
+
+    // float acc = 0.0f;
+    half2 acc = __floats2half2_rn(0.0f,0.0f);
     if (h < Height_out && w < Width_out) {
         for (int c=0; c < Channel; c++) {
-            for (int p=0; p < K; p++) {
-                for (int q=0; q < K; q++)
-                    acc += in_4d(b, c, h+p, w+q) * mask_4d(m, c, p, q);
-            }
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 0, 0), mask_4d(m, c, 0, 1)), __floats2half2_rn(in_4d(b, c, h + 0, w + 0), in_4d(b, c, h + 0, w + 1)))); 
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 0, 2), mask_4d(m, c, 0, 3)), __floats2half2_rn(in_4d(b, c, h + 0, w + 2), in_4d(b, c, h + 0, w + 3))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 0, 4), mask_4d(m, c, 0, 5)), __floats2half2_rn(in_4d(b, c, h + 0, w + 4), in_4d(b, c, h + 0, w + 5))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 0, 6), mask_4d(m, c, 1, 0)), __floats2half2_rn(in_4d(b, c, h + 0, w + 6), in_4d(b, c, h + 1, w + 0))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 1, 1), mask_4d(m, c, 1, 2)), __floats2half2_rn(in_4d(b, c, h + 1, w + 1), in_4d(b, c, h + 1, w + 2))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 1, 3), mask_4d(m, c, 1, 4)), __floats2half2_rn(in_4d(b, c, h + 1, w + 3), in_4d(b, c, h + 1, w + 4))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 1, 5), mask_4d(m, c, 1, 6)), __floats2half2_rn(in_4d(b, c, h + 1, w + 5), in_4d(b, c, h + 1, w + 6))));   
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 2, 0), mask_4d(m, c, 2, 1)), __floats2half2_rn(in_4d(b, c, h + 2, w + 0), in_4d(b, c, h + 2, w + 1)))); 
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 2, 2), mask_4d(m, c, 2, 3)), __floats2half2_rn(in_4d(b, c, h + 2, w + 2), in_4d(b, c, h + 2, w + 3))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 2, 4), mask_4d(m, c, 2, 5)), __floats2half2_rn(in_4d(b, c, h + 2, w + 4), in_4d(b, c, h + 2, w + 5))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 2, 6), mask_4d(m, c, 3, 0)), __floats2half2_rn(in_4d(b, c, h + 2, w + 6), in_4d(b, c, h + 3, w + 0))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 3, 1), mask_4d(m, c, 3, 2)), __floats2half2_rn(in_4d(b, c, h + 3, w + 1), in_4d(b, c, h + 3, w + 2))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 3, 3), mask_4d(m, c, 3, 4)), __floats2half2_rn(in_4d(b, c, h + 3, w + 3), in_4d(b, c, h + 3, w + 4))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 3, 5), mask_4d(m, c, 3, 6)), __floats2half2_rn(in_4d(b, c, h + 3, w + 5), in_4d(b, c, h + 3, w + 6))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 4, 0), mask_4d(m, c, 4, 1)), __floats2half2_rn(in_4d(b, c, h + 4, w + 0), in_4d(b, c, h + 4, w + 1)))); 
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 4, 2), mask_4d(m, c, 4, 3)), __floats2half2_rn(in_4d(b, c, h + 4, w + 2), in_4d(b, c, h + 4, w + 3))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 4, 4), mask_4d(m, c, 4, 5)), __floats2half2_rn(in_4d(b, c, h + 4, w + 4), in_4d(b, c, h + 4, w + 5))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 4, 6), mask_4d(m, c, 5, 0)), __floats2half2_rn(in_4d(b, c, h + 4, w + 6), in_4d(b, c, h + 5, w + 0))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 5, 1), mask_4d(m, c, 5, 2)), __floats2half2_rn(in_4d(b, c, h + 5, w + 1), in_4d(b, c, h + 5, w + 2))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 5, 3), mask_4d(m, c, 5, 4)), __floats2half2_rn(in_4d(b, c, h + 5, w + 3), in_4d(b, c, h + 5, w + 4))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 5, 5), mask_4d(m, c, 5, 6)), __floats2half2_rn(in_4d(b, c, h + 5, w + 5), in_4d(b, c, h + 5, w + 6))));  
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 6, 0), mask_4d(m, c, 6, 1)), __floats2half2_rn(in_4d(b, c, h + 6, w + 0), in_4d(b, c, h + 6, w + 1)))); 
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 6, 2), mask_4d(m, c, 6, 3)), __floats2half2_rn(in_4d(b, c, h + 6, w + 2), in_4d(b, c, h + 6, w + 3))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, 6, 4), mask_4d(m, c, 6, 5)), __floats2half2_rn(in_4d(b, c, h + 6, w + 4), in_4d(b, c, h + 6, w + 5))));
+            acc = __hadd2(acc, __hmul2(__floats2half2_rn(mask_4d(m, c, K-1, K-1), 0.0f), __floats2half2_rn(in_4d(b, c, h + K - 1, w + K - 1), 0.0f)));
         }
-        out_4d(b, m, h, w) = acc;
+        out_4d(b, m, h, w) = __half2float(__hadd(acc.x, acc.y));
     }
 
     #undef out_4d
